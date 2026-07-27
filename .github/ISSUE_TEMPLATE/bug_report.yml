@@ -1,0 +1,41 @@
+name: Bug report
+description: Report reproducible WatchGPU behavior
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Before posting, redact hostnames, usernames, paths, PIDs, task names, and GPU UUIDs.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest safe sequence that reproduces the issue.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: WatchGPU revision
+      placeholder: commit SHA or release
+    validations:
+      required: true
+  - type: dropdown
+    id: background
+    attributes:
+      label: Background mode
+      options: [systemd-user, detached, foreground, unknown]
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Optional redacted doctor/status/log output. Never include credentials or private training arguments.

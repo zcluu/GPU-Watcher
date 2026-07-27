@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+.env
+.env.*
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+htmlcov/
+
+# Local WatchGPU runtime data
+config.toml
+leases.json
+profiles.jsonl
+restart.json
+shutdown.json
+supervisor.pid
+watchgpu.log*
+watchgpu.service
+watchgpu.sock
+
+# Credentials and private keys
+*.key
+*.pem
+credentials*
+secrets*

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+validate_torch_python() {
+  local candidate="$1"
+  [[ -x "$candidate" ]] || return 1
+  "$candidate" -c '
+import sys
+try:
+    import torch
+    if not torch.cuda.is_available():
+        raise RuntimeError("PyTorch cannot access CUDA")
+except Exception as exc:
+    print(f"{sys.executable}: CUDA-enabled PyTorch validation failed: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+' >/dev/null
+}
+
+find_named_environment() {
+  local bootstrap_python="$1"
+  local environment_name="$2"
+  local manager payload candidate
+  for manager in mamba conda micromamba; do
+    command -v "$manager" >/dev/null 2>&1 || continue
+    payload="$($manager env list --json 2>/dev/null || true)"
+    [[ -n "$payload" ]] || continue
+    while IFS= read -r candidate; do
+      [[ -n "$candidate" ]] || continue
+      if validate_torch_python "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done < <(
+      "$bootstrap_python" -c '
+import json, os, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+environment_name = sys.argv[1]
+for path in payload.get("envs", []):
+    if isinstance(path, str) and os.path.basename(path.rstrip("/")) == environment_name:
+        print(os.path.join(path, "bin", "python"))
+' "$environment_name" <<<"$payload"
+    )
+  done
+  return 1
+}
+
+PYTHON=""
+if [[ -n "${WATCHGPU_PYTHON:-}" ]]; then
+  if ! validate_torch_python "$WATCHGPU_PYTHON"; then
+    echo "WATCHGPU_PYTHON does not provide CUDA-enabled PyTorch: $WATCHGPU_PYTHON" >&2
+    exit 1
+  fi
+  PYTHON="$WATCHGPU_PYTHON"
+else
+  CURRENT_PYTHON="$(command -v python || command -v python3 || true)"
+  if [[ -n "$CURRENT_PYTHON" ]] && validate_torch_python "$CURRENT_PYTHON"; then
+    PYTHON="$CURRENT_PYTHON"
+  elif [[ -n "${WATCHGPU_ENV_NAME:-}" && -n "$CURRENT_PYTHON" ]]; then
+    PYTHON="$(find_named_environment "$CURRENT_PYTHON" "$WATCHGPU_ENV_NAME" || true)"
+  fi
+fi
+
+if [[ -z "$PYTHON" ]]; then
+  echo "No usable CUDA-enabled Python was found." >&2
+  echo "Activate your environment, set WATCHGPU_PYTHON, or set WATCHGPU_ENV_NAME." >&2
+  exit 1
+fi
+
+echo "Installing WatchGPU with: $PYTHON"
+if [[ "${WATCHGPU_EDITABLE:-0}" == "1" ]]; then
+  "$PYTHON" -m pip install --editable "$ROOT_DIR"
+else
+  "$PYTHON" -m pip install "$ROOT_DIR"
+fi
+"$PYTHON" -m watchgpu.cli doctor
+echo "WatchGPU is installed. Start with: watchgpu start --gpus 0 --leave-free 2"
