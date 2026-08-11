@@ -133,6 +133,12 @@ For the full model, see [Architecture](docs/architecture.md).
 ```bash
 watchgpu status
 watchgpu status --json
+# Keys come directly from `watchgpu config show`
+watchgpu config set maintenance_cpu_target_percent 25
+watchgpu config set cpu_budget_percent=100
+watchgpu config set maintenance_compute_enabled false
+
+# Shortcuts remain available for frequent changes
 watchgpu config set -f 3 --runtime-only
 watchgpu config set -c 25 --runtime-only
 watchgpu pause GPU-UUID
@@ -152,6 +158,12 @@ GPU workers split this target instead of multiplying it. The work is bounded
 checksum computation, remains interruptible for IPC, and yields immediately for
 leases, pauses, shutdown, or the `--cpu-limit/-b` hard limit. Status and Console
 show the configured target, observed process-tree usage, and maintenance state.
+
+`watchgpu config set KEY VALUE` and `watchgpu config set KEY=VALUE` use the same
+field names shown by `watchgpu config show`, with the same validation and live
+apply path as shortcut options. Do not combine a key assignment with shortcuts
+in one command. Use `watchgpu restart schedule set` for the structured
+`maintenance_restart` setting.
 
 Upgrade and removal procedures are documented in [Operations](docs/operations.md).
 

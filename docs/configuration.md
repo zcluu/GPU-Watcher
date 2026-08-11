@@ -41,6 +41,11 @@ Use `watchgpu config show` for the complete resolved configuration.
 ## Runtime Changes
 
 ```bash
+# Use field names shown by `watchgpu config show`
+watchgpu config set maintenance_cpu_target_percent 50
+watchgpu config set cpu_budget_percent=80
+watchgpu config set maintenance_compute_enabled false
+
 # Apply until the daemon exits
 watchgpu config set -f 3 --runtime-only
 
@@ -53,6 +58,12 @@ watchgpu config set --gpus GPU-UUID-1,GPU-UUID-2
 # Configure CPU health work without restarting
 watchgpu config set -c 50 --runtime-only
 ```
+
+`config set KEY VALUE` and `config set KEY=VALUE` modify one top-level field
+using the exact name shown by `config show`. The update receives the same
+validation and live-apply behavior as a shortcut option. Do not mix this form
+with shortcut options in one command. Use `restart schedule set` for the
+structured `maintenance_restart` field.
 
 The target is for the complete WatchGPU service, not per GPU. When several
 workers share one affinity core, WatchGPU divides the target among them. It is

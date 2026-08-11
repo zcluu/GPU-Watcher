@@ -170,6 +170,154 @@ def test_config_set_short_cpu_alias_hot_applies_target(
     assert config["maintenance_cpu_target_percent"] == 75
 
 
+@pytest.mark.parametrize(
+    ("key", "value", "expected_key", "expected_value"),
+    [
+        (
+            "maintenance_cpu_target_percent",
+            "60",
+            "maintenance_cpu_target_percent",
+            60,
+        ),
+        ("cpu_budget_percent", "80", "cpu_budget_percent", 80),
+        (
+            "maintenance_compute_enabled",
+            "false",
+            "maintenance_compute_enabled",
+            False,
+        ),
+        ("leave_free_mib", "2.5", "leave_free_mib", 2560),
+    ],
+)
+def test_config_set_accepts_config_show_key_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+    value: str,
+    expected_key: str,
+    expected_value: object,
+) -> None:
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def client_call(
+        _socket_path: Path,
+        method: str,
+        params: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        calls.append((method, params))
+        if method == "status.get":
+            return {
+                "policy": {
+                    "revision": 3,
+                    "config": WatchGPUConfig(
+                        gpus=[GPUConfig(selector="GPU-0")]
+                    ).model_dump(mode="json"),
+                }
+            }
+        return {"status": "APPLIED", "revision": 4}
+
+    monkeypatch.setattr(cli_module, "_client_call", client_call)
+    result = CliRunner().invoke(
+        app,
+        ["config", "set", key, value, "--runtime-only"],
+        env={
+            "XDG_RUNTIME_DIR": str(tmp_path / "run"),
+            "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    params = calls[1][1]
+    assert params is not None
+    config = params["config"]
+    assert isinstance(config, dict)
+    assert config[expected_key] == expected_value
+
+
+def test_config_set_direct_key_reports_unknown_or_invalid_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = WatchGPUConfig(gpus=[GPUConfig(selector="GPU-0")])
+    monkeypatch.setattr(
+        cli_module,
+        "_client_call",
+        lambda _path, method, _params=None: (
+            {"policy": {"revision": 1, "config": current.model_dump(mode="json")}}
+            if method == "status.get"
+            else {"status": "APPLIED"}
+        ),
+    )
+    env = {
+        "XDG_RUNTIME_DIR": str(tmp_path / "run"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+
+    unknown = CliRunner().invoke(app, ["config", "set", "not_a_key", "1"], env=env)
+    invalid = CliRunner().invoke(
+        app, ["config", "set", "cpu_budget_percent", "101"], env=env
+    )
+
+    assert unknown.exit_code != 0
+    assert "unknown config key" in unknown.output
+    assert invalid.exit_code != 0
+    assert "less than or equal to 100" in invalid.output
+
+
+def test_config_set_accepts_key_equals_value_form(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = WatchGPUConfig(gpus=[GPUConfig(selector="GPU-0")])
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def client_call(
+        _path: Path, method: str, params: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        calls.append((method, params))
+        if method == "status.get":
+            return {
+                "policy": {"revision": 1, "config": current.model_dump(mode="json")}
+            }
+        return {"status": "APPLIED", "revision": 2}
+
+    monkeypatch.setattr(cli_module, "_client_call", client_call)
+    result = CliRunner().invoke(
+        app,
+        ["config", "set", "maintenance_cpu_target_percent=40"],
+        env={
+            "XDG_RUNTIME_DIR": str(tmp_path / "run"),
+            "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    params = calls[1][1]
+    assert params is not None
+    config = params["config"]
+    assert isinstance(config, dict)
+    assert config["maintenance_cpu_target_percent"] == 40
+
+
+def test_config_set_direct_key_persists_while_daemon_is_stopped(tmp_path: Path) -> None:
+    env = {
+        "XDG_RUNTIME_DIR": str(tmp_path / "run"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+
+    result = CliRunner().invoke(
+        app,
+        ["config", "set", "maintenance_cpu_target_percent", "35"],
+        env=env,
+    )
+
+    assert result.exit_code == 0, result.output
+    saved = load_config(tmp_path / "config" / "watchgpu" / "config.toml")
+    assert saved.maintenance_cpu_target_percent == 35
+
+
 def test_config_set_works_offline_and_persists_gpu_uuid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

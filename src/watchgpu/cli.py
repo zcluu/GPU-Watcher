@@ -467,8 +467,16 @@ def config_show(
     _print_data(config.model_dump(mode="json"), json_output=json_output)
 
 
-@config_app.command("set", help="Change policy live, optionally saving it for the next start.")
+@config_app.command(
+    "set",
+    help="Change one config key directly, or use shortcuts for common live policy changes.",
+)
 def config_set(
+    config_key: str | None = typer.Argument(
+        None,
+        help="Config key from 'config show', or KEY=VALUE; for example cpu_budget_percent.",
+    ),
+    config_value: str | None = typer.Argument(None, help="New value for CONFIG_KEY."),
     free_memory: str | None = typer.Option(
         None, "--free", "-f", help="Free memory to keep; bare values are GiB."
     ),
@@ -537,6 +545,10 @@ def config_set(
     else:
         candidate, revision = _runtime_policy(status_value)
         running = True
+    if config_key is not None and config_value is None and "=" in config_key:
+        config_key, config_value = config_key.split("=", 1)
+    if (config_key is None) != (config_value is None):
+        raise typer.BadParameter("config-key mode requires both CONFIG_KEY and VALUE")
     leave_free = _coalesce_legacy_option(
         free_memory, leave_free_legacy, "--free", "--leave-free"
     )
@@ -567,51 +579,92 @@ def config_set(
         "--gpu-work",
         "--maintenance-compute",
     )
-    updates: dict[str, Any] = {}
-    if poll_interval is not None:
-        updates["poll_interval_seconds"] = poll_interval
-    if growth_stability is not None:
-        updates["growth_stability_seconds"] = growth_stability
-    if duty_cycle is not None:
-        updates["maintenance_duty_cycle_percent"] = duty_cycle
-    if cpu_budget is not None:
-        updates["cpu_budget_percent"] = cpu_budget
-    if cpu_target is not None:
-        updates["maintenance_cpu_target_percent"] = cpu_target
-    if maintenance_compute is not None:
-        updates["maintenance_compute_enabled"] = maintenance_compute
-    gpu_configs = [item.model_copy(deep=True) for item in candidate.gpus]
-    if gpus is not None:
-        selectors = _split_selectors(gpus)
-        if not running:
-            with NVMLGPUObserver() as observer:
-                selectors = tuple(
-                    item.uuid
-                    for item in resolve_gpu_selectors(observer.snapshots(), selectors)
-                )
-        gpu_configs = [GPUConfig(selector=selector) for selector in selectors]
-    if gpu is None:
-        if leave_free is not None:
-            updates["leave_free_mib"] = parse_user_capacity_mib(leave_free)
-        if reserve_limit is not None:
-            raise typer.BadParameter("--reserve-limit requires --gpu")
-    else:
-        if not running:
-            with NVMLGPUObserver() as observer:
-                gpu = resolve_gpu_selectors(observer.snapshots(), (gpu,))[0].uuid
-        by_selector = {item.selector: item for item in gpu_configs}
-        selected = by_selector.get(gpu, GPUConfig(selector=gpu))
-        selected_updates: dict[str, Any] = {}
-        if leave_free is not None:
-            selected_updates["leave_free_mib"] = parse_user_capacity_mib(leave_free)
-        if reserve_limit is not None:
-            selected_updates["reserve_limit_mib"] = parse_user_capacity_mib(reserve_limit)
-        by_selector[gpu] = selected.model_copy(update=selected_updates)
-        gpu_configs = list(by_selector.values())
-    updates["gpus"] = gpu_configs
-    validated = WatchGPUConfig.model_validate(
-        candidate.model_copy(update=updates).model_dump()
+    shortcut_supplied = any(
+        value is not None
+        for value in (
+            free_memory,
+            leave_free_legacy,
+            gpu,
+            gpus,
+            limit,
+            reserve_limit_legacy,
+            poll_interval,
+            poll_interval_legacy,
+            growth_stability,
+            growth_stability_legacy,
+            duty_cycle,
+            duty_cycle_legacy,
+            cpu_limit,
+            cpu_budget_legacy,
+            cpu_target,
+            cpu_target_legacy,
+            maintenance_compute,
+            maintenance_compute_legacy,
+        )
     )
+    if config_key is not None and shortcut_supplied:
+        raise typer.BadParameter("use either CONFIG_KEY VALUE or shortcut options, not both")
+    if config_key is None and not shortcut_supplied:
+        raise typer.BadParameter(
+            "specify CONFIG_KEY VALUE or a shortcut such as --cpu-target/-c"
+        )
+
+    if config_key is not None:
+        try:
+            updates = _direct_config_update(config_key, config_value, running=running)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    else:
+        updates = {}
+        if poll_interval is not None:
+            updates["poll_interval_seconds"] = poll_interval
+        if growth_stability is not None:
+            updates["growth_stability_seconds"] = growth_stability
+        if duty_cycle is not None:
+            updates["maintenance_duty_cycle_percent"] = duty_cycle
+        if cpu_budget is not None:
+            updates["cpu_budget_percent"] = cpu_budget
+        if cpu_target is not None:
+            updates["maintenance_cpu_target_percent"] = cpu_target
+        if maintenance_compute is not None:
+            updates["maintenance_compute_enabled"] = maintenance_compute
+        gpu_configs = [item.model_copy(deep=True) for item in candidate.gpus]
+        if gpus is not None:
+            selectors = _split_selectors(gpus)
+            if not running:
+                with NVMLGPUObserver() as observer:
+                    selectors = tuple(
+                        item.uuid
+                        for item in resolve_gpu_selectors(observer.snapshots(), selectors)
+                    )
+            gpu_configs = [GPUConfig(selector=selector) for selector in selectors]
+        if gpu is None:
+            if leave_free is not None:
+                updates["leave_free_mib"] = parse_user_capacity_mib(leave_free)
+            if reserve_limit is not None:
+                raise typer.BadParameter("--limit/-r requires --gpu/-g")
+        else:
+            if not running:
+                with NVMLGPUObserver() as observer:
+                    gpu = resolve_gpu_selectors(observer.snapshots(), (gpu,))[0].uuid
+            by_selector = {item.selector: item for item in gpu_configs}
+            selected = by_selector.get(gpu, GPUConfig(selector=gpu))
+            selected_updates: dict[str, Any] = {}
+            if leave_free is not None:
+                selected_updates["leave_free_mib"] = parse_user_capacity_mib(leave_free)
+            if reserve_limit is not None:
+                selected_updates["reserve_limit_mib"] = parse_user_capacity_mib(
+                    reserve_limit
+                )
+            by_selector[gpu] = selected.model_copy(update=selected_updates)
+            gpu_configs = list(by_selector.values())
+        updates["gpus"] = gpu_configs
+    candidate_values = candidate.model_dump(mode="python")
+    candidate_values.update(updates)
+    try:
+        validated = WatchGPUConfig.model_validate(candidate_values)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     if not running:
         if not save:
             raise typer.BadParameter("--runtime-only requires a running daemon")
@@ -983,6 +1036,38 @@ def _coalesce_legacy_option(
     if current is not None and legacy is not None:
         raise typer.BadParameter(f"use only one of {current_name} and {legacy_name}")
     return current if current is not None else legacy
+
+
+def _direct_config_update(
+    key: str, value: str | None, *, running: bool
+) -> dict[str, object]:
+    """Parse the documented ``config set KEY VALUE`` form."""
+
+    if value is None:
+        raise typer.BadParameter("config-key mode requires a VALUE")
+    normalized_key = key.strip().replace("-", "_")
+    aliases = {"leave_free": "leave_free_mib"}
+    normalized_key = aliases.get(normalized_key, normalized_key)
+    if normalized_key == "maintenance_restart":
+        raise typer.BadParameter("use 'restart schedule set' for maintenance_restart")
+    if normalized_key not in WatchGPUConfig.model_fields:
+        raise typer.BadParameter(
+            f"unknown config key: {key}; use 'watchgpu config show' to list keys"
+        )
+    if normalized_key == "gpus":
+        selectors = _split_selectors(value)
+        if not running:
+            with NVMLGPUObserver() as observer:
+                selectors = tuple(
+                    snapshot.uuid
+                    for snapshot in resolve_gpu_selectors(observer.snapshots(), selectors)
+                )
+        return {"gpus": [GPUConfig(selector=selector) for selector in selectors]}
+    if normalized_key == "leave_free_mib":
+        return {normalized_key: parse_user_capacity_mib(value)}
+    if normalized_key == "reserve_ratio" and value.strip().lower() in {"none", "null"}:
+        return {normalized_key: None}
+    return {normalized_key: value}
 
 
 def _print_start_preview(config: WatchGPUConfig) -> None:
