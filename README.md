@@ -8,7 +8,7 @@
 
 [简体中文](README.zh-CN.md) | English
 
-WatchGPU is a user-space service for teams that intentionally share GPU servers without a cluster scheduler. It observes local NVML state, keeps an elastic and immediately reclaimable VRAM reservation, and releases that reservation before launching a managed PyTorch job.
+WatchGPU is a user-space service for authorized GPU reservation and managed PyTorch launches. It observes local NVML state, keeps a sticky and explicitly reclaimable VRAM reservation, and releases the requested portion before launching a managed PyTorch job.
 
 It needs no root access, does not require a shared home directory, and never signals unrelated GPU processes.
 
@@ -122,7 +122,7 @@ flowchart LR
     G --> B
 ```
 
-WatchGPU allocates its reservation in bounded chunks. A lease request pauses maintenance work, releases enough WatchGPU-owned chunks, verifies the release through NVML, and only then launches the training command with the approved GPU UUIDs. It cannot prevent an unrelated process from racing for newly freed memory.
+WatchGPU allocates its reservation in bounded chunks. Once allocated, unrelated decreases in driver-visible free memory do not reduce the current hold. Memory is released only for a managed lease, an explicit release/pause/stop/restart action, or an explicit reservation-policy reduction. A lease request pauses maintenance work, releases enough WatchGPU-owned chunks, verifies the release through NVML, and only then launches the training command with the approved GPU UUIDs.
 
 For the full model, see [Architecture](docs/architecture.md).
 

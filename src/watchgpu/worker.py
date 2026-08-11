@@ -108,6 +108,7 @@ class WorkerController:
         self._allocation_tolerance_mib = allocation_tolerance_mib
         self._state = WorkerState.OBSERVING
         self._growth_candidate: tuple[int, float] | None = None
+        self._policy_reconcile_pending = False
 
     @property
     def status(self) -> WorkerStatus:
@@ -124,10 +125,12 @@ class WorkerController:
             raise ValueError("growth_stability_seconds cannot be negative")
         if allocation_tolerance_mib < 0:
             raise ValueError("allocation_tolerance_mib cannot be negative")
+        limits_changed = limits != self._limits
         self._limits = limits
         self._growth_stability_seconds = growth_stability_seconds
         self._allocation_tolerance_mib = allocation_tolerance_mib
         self._growth_candidate = None
+        self._policy_reconcile_pending = limits_changed
 
     def maintenance_step(self) -> bool:
         if self._state in {WorkerState.PAUSED, WorkerState.STOPPED}:
@@ -171,9 +174,11 @@ class WorkerController:
                 snapshot,
                 current_hold_mib=self._allocator.held_mib,
                 limits=self._limits,
+                preserve_current_hold=not self._policy_reconcile_pending,
             )
             - max(0, lease_headroom_mib),
         )
+        self._policy_reconcile_pending = False
         held_mib = self._allocator.held_mib
 
         if target_mib < held_mib - self._allocation_tolerance_mib:

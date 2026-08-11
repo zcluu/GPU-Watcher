@@ -17,7 +17,7 @@ def _snapshot(*, free_mib: int) -> GPUSnapshot:
     )
 
 
-def test_worker_delays_growth_but_shrinks_immediately() -> None:
+def test_worker_delays_growth_and_keeps_its_hold_under_external_pressure() -> None:
     allocator = InMemoryMemoryAllocator(chunk_mib=500)
     worker = WorkerController(
         gpu_uuid="GPU-0",
@@ -39,9 +39,9 @@ def test_worker_delays_growth_but_shrinks_immediately() -> None:
     assert grown.action is WorkerAction.GROW
     assert grown.held_mib == 8000
 
-    shrunk = worker.tick(_snapshot(free_mib=0), now=11)
-    assert shrunk.action is WorkerAction.SHRINK
-    assert shrunk.held_mib == 7000
+    held = worker.tick(_snapshot(free_mib=0), now=11)
+    assert held.action is WorkerAction.NOOP
+    assert held.held_mib == 8000
 
 
 def test_worker_releases_for_a_lease_and_pause_without_stopping_training() -> None:
@@ -95,6 +95,50 @@ def test_worker_policy_can_be_updated_without_restart() -> None:
 
     assert status.action is WorkerAction.SHRINK
     assert status.held_mib == 1000
+
+
+def test_unrelated_policy_update_does_not_unlock_external_pressure_shrink() -> None:
+    allocator = InMemoryMemoryAllocator(chunk_mib=500)
+    allocator.reconcile(8000)
+    limits = ReservationLimits(
+        leave_free_mib=1000, reserve_limit_mib=None, reserve_ratio=None
+    )
+    worker = WorkerController(
+        gpu_uuid="GPU-0",
+        allocator=allocator,
+        limits=limits,
+        growth_stability_seconds=10,
+        allocation_tolerance_mib=0,
+    )
+
+    worker.update_policy(
+        limits=limits,
+        growth_stability_seconds=20,
+        allocation_tolerance_mib=0,
+    )
+    status = worker.tick(_snapshot(free_mib=0), now=0)
+
+    assert status.action is WorkerAction.NOOP
+    assert status.held_mib == 8000
+
+
+def test_active_lease_can_release_sticky_hold_under_external_pressure() -> None:
+    allocator = InMemoryMemoryAllocator(chunk_mib=500)
+    allocator.reconcile(8000)
+    worker = WorkerController(
+        gpu_uuid="GPU-0",
+        allocator=allocator,
+        limits=ReservationLimits(
+            leave_free_mib=1000, reserve_limit_mib=None, reserve_ratio=None
+        ),
+        growth_stability_seconds=10,
+        allocation_tolerance_mib=0,
+    )
+
+    status = worker.tick(_snapshot(free_mib=0), now=0, lease_headroom_mib=3000)
+
+    assert status.action is WorkerAction.SHRINK
+    assert status.held_mib == 5000
 
 
 def test_worker_can_manually_release_its_own_reservation() -> None:

@@ -18,6 +18,7 @@ def calculate_target_hold_mib(
     *,
     current_hold_mib: int,
     limits: ReservationLimits,
+    preserve_current_hold: bool = True,
 ) -> int:
     """Return how much memory WatchGPU should hold for the observed state."""
 
@@ -26,6 +27,12 @@ def calculate_target_hold_mib(
         snapshot.total_mib - snapshot.free_mib - max(0, current_hold_mib),
     )
     target_mib = max(0, snapshot.total_mib - external_used_mib - limits.leave_free_mib)
+    if preserve_current_hold:
+        target_mib = max(target_mib, max(0, current_hold_mib))
+
+    # Explicit policy ceilings remain authoritative even when the current hold
+    # is sticky against changes in external usage.
+    target_mib = min(target_mib, max(0, snapshot.total_mib - limits.leave_free_mib))
 
     if limits.reserve_limit_mib is not None:
         target_mib = min(target_mib, limits.reserve_limit_mib)

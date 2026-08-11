@@ -13,7 +13,7 @@ WatchGPU is a per-host, per-user service. It does not coordinate state across se
 
 ## Reservation Policy
 
-For each managed GPU, the target reservation is derived from driver-visible free memory, the worker's current hold, `leave_free`, and optional reserve limits. Growth waits for a stability window; shrink and lease release happen immediately.
+For each managed GPU, the initial target reservation is derived from driver-visible free memory, `leave_free`, and optional reserve limits. Growth waits for a stability window. Once allocated, the current hold is sticky: unrelated decreases in driver-visible free memory do not lower it. Memory is released only for a managed lease, an explicit release/pause/stop/restart action, or an explicit reservation-policy reduction.
 
 Allocations use a configurable main chunk size plus an optional tail chunk. The worker destroys released tensors before flushing the PyTorch caching allocator, then the supervisor waits for NVML to confirm the corresponding increase in free memory.
 

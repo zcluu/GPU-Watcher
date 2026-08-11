@@ -47,3 +47,50 @@ def test_target_hold_respects_the_strictest_configured_limit() -> None:
     )
 
     assert calculate_target_hold_mib(snapshot, current_hold_mib=0, limits=limits) == 20 * 1024
+
+
+def test_external_usage_cannot_reduce_an_existing_hold() -> None:
+    limits = ReservationLimits(
+        leave_free_mib=1000, reserve_limit_mib=None, reserve_ratio=None
+    )
+    pressured = GPUSnapshot(
+        index=0,
+        uuid="GPU-0",
+        name="Test GPU",
+        total_mib=10_000,
+        free_mib=0,
+        utilization_percent=50,
+    )
+
+    assert (
+        calculate_target_hold_mib(
+            pressured,
+            current_hold_mib=8000,
+            limits=limits,
+        )
+        == 8000
+    )
+
+
+def test_explicit_policy_reconcile_can_reduce_an_existing_hold() -> None:
+    limits = ReservationLimits(
+        leave_free_mib=3000, reserve_limit_mib=None, reserve_ratio=None
+    )
+    snapshot = GPUSnapshot(
+        index=0,
+        uuid="GPU-0",
+        name="Test GPU",
+        total_mib=10_000,
+        free_mib=1000,
+        utilization_percent=0,
+    )
+
+    assert (
+        calculate_target_hold_mib(
+            snapshot,
+            current_hold_mib=3000,
+            limits=limits,
+            preserve_current_hold=False,
+        )
+        == 1000
+    )
