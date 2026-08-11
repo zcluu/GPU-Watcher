@@ -125,16 +125,63 @@ class _ArgumentParser(argparse.ArgumentParser):
 
 
 def parse_launch_args(argv: Sequence[str]) -> LaunchConfig:
-    parser = _ArgumentParser(prog="watchgpu-run", add_help=True)
-    parser.add_argument("--task", required=True)
-    parser.add_argument("--nproc-per-node", type=int, default=1)
-    parser.add_argument("--nnodes", type=int, default=1)
-    parser.add_argument("--memory-per-gpu", default="auto")
-    parser.add_argument("--devices")
-    parser.add_argument("--ttl-seconds", type=float, default=600.0)
-    parser.add_argument("--lease-timeout-seconds", type=float, default=3600.0)
-    parser.add_argument("training_script")
-    parser.add_argument("training_args", nargs=argparse.REMAINDER)
+    parser = _ArgumentParser(
+        prog="watchgpu-run",
+        add_help=True,
+        description="Acquire GPU memory, then launch a torchrun-compatible training script.",
+    )
+    parser.add_argument("--task", "-t", required=True, help="Task name shown in status/Console.")
+    parser.add_argument(
+        "--nproc-per-node",
+        "-n",
+        type=int,
+        default=1,
+        help="Training processes and GPUs to launch (default: 1).",
+    )
+    parser.add_argument(
+        "--nnodes",
+        type=int,
+        default=1,
+        help="Node count; only 1 is currently supported (default: 1).",
+    )
+    parser.add_argument(
+        "--memory",
+        "-m",
+        dest="memory_per_gpu",
+        default="auto",
+        help="Memory per GPU; bare values are GiB, or use 'auto' (default).",
+    )
+    parser.add_argument("--memory-per-gpu", dest="memory_per_gpu", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--devices",
+        "-d",
+        help="Allowed GPU indices/UUIDs, comma-separated; omit for any managed GPU.",
+    )
+    parser.add_argument(
+        "--ttl",
+        dest="ttl_seconds",
+        type=float,
+        default=600.0,
+        help="Lease heartbeat timeout in seconds (default: 600).",
+    )
+    parser.add_argument("--ttl-seconds", dest="ttl_seconds", type=float, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--wait",
+        dest="lease_timeout_seconds",
+        type=float,
+        default=3600.0,
+        help="Maximum seconds to wait for the lease (default: 3600).",
+    )
+    parser.add_argument(
+        "--lease-timeout-seconds",
+        dest="lease_timeout_seconds",
+        type=float,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument("training_script", help="Python training script to run after the lease is active.")
+    parser.add_argument(
+        "training_args", nargs=argparse.REMAINDER, help="Arguments passed unchanged to the script."
+    )
     values = parser.parse_args(list(argv))
 
     if values.nnodes != 1:
@@ -294,7 +341,7 @@ def _resolve_memory(
     if bootstrap_mib <= 0:
         raise LauncherConfigurationError(
             "not enough memory is available for safe bootstrap profiling; "
-            "use an explicit --memory-per-gpu value"
+            "use an explicit --memory/-m value"
         )
     return bootstrap_mib
 
@@ -363,7 +410,7 @@ def _select_bootstrap_gpus(
 
 def _parse_memory_setting(value: object) -> MemorySetting:
     if not isinstance(value, str):
-        raise LauncherConfigurationError("--memory-per-gpu must be a capacity or auto")
+        raise LauncherConfigurationError("--memory/-m must be a capacity or auto")
     if value.lower() == "auto":
         return "auto"
     try:
@@ -371,7 +418,7 @@ def _parse_memory_setting(value: object) -> MemorySetting:
     except (TypeError, ValueError) as exc:
         raise LauncherConfigurationError(str(exc)) from exc
     if memory_mib <= 0:
-        raise LauncherConfigurationError("--memory-per-gpu must be positive")
+        raise LauncherConfigurationError("--memory/-m must be positive")
     return memory_mib
 
 

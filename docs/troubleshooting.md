@@ -32,7 +32,7 @@ The lease heartbeat expired or the daemon recovered while training identity may 
 The user systemd manager does not run an interactive shell and may not inherit environment-specific CUDA library variables. Confirm that the selected Python can locate its runtime libraries without shell activation. As a diagnostic, try:
 
 ```bash
-watchgpu start --gpus 0 --leave-free 2 --background-mode detached
+watchgpu start -g 0 -f 2 -b detached
 ```
 
 ## `OVER_LIMIT`

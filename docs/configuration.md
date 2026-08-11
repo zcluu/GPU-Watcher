@@ -42,16 +42,16 @@ Use `watchgpu config show` for the complete resolved configuration.
 
 ```bash
 # Apply until the daemon exits
-watchgpu config set --leave-free 3 --runtime-only
+watchgpu config set -f 3 --runtime-only
 
 # Apply and persist
-watchgpu config set --gpu GPU-UUID --leave-free 2 --reserve-limit 30
+watchgpu config set -g GPU-UUID -f 2 -r 30
 
 # Change the managed set
 watchgpu config set --gpus GPU-UUID-1,GPU-UUID-2
 
 # Configure CPU health work without restarting
-watchgpu config set --maintenance-cpu-target 50 --runtime-only
+watchgpu config set -c 50 --runtime-only
 ```
 
 The target is for the complete WatchGPU service, not per GPU. When several

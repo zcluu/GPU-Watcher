@@ -10,7 +10,7 @@ Use a controlled stop so WatchGPU releases only its own reservations, then reins
 watchgpu stop --release
 git pull --ff-only
 ./install-watchgpu
-watchgpu start --gpus 0,1 --leave-free 2
+watchgpu start -g 0,1 -f 2
 ```
 
 Stopping WatchGPU does not signal managed training or external GPU processes. During an alpha upgrade, a stop/start is preferred over an in-place daemon restart because protocol and persisted-state compatibility may change.
@@ -52,7 +52,7 @@ Configuration and history are retained intentionally under XDG config/state dire
 
 ```bash
 watchgpu restart --now
-watchgpu restart schedule set --at 04:00 --jitter 20m --defer-while-leased
+watchgpu restart schedule set -a 04:00 -j 20m --defer
 watchgpu restart schedule show
 watchgpu restart schedule disable
 ```

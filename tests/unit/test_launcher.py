@@ -55,6 +55,18 @@ def test_watchgpu_run_treats_bare_memory_as_gib() -> None:
     assert config.memory_per_gpu == 12_800
 
 
+def test_watchgpu_run_accepts_compact_launch_options() -> None:
+    config = parse_launch_args(
+        ["-t", "test", "-n", "1", "-m", "2.5", "-d", "1", "test.py"]
+    )
+
+    assert config.task_name == "test"
+    assert config.nproc_per_node == 1
+    assert config.memory_per_gpu == 2560
+    assert config.devices == ("1",)
+    assert config.training_script == "test.py"
+
+
 def test_auto_bootstrap_keeps_driver_headroom(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         launcher_module,

@@ -65,20 +65,22 @@ watchgpu doctor
 Preview the policy without allocating memory, then start the service:
 
 ```bash
-watchgpu start --gpus 0,1 --leave-free 2 --dry-run
-watchgpu start --gpus 0,1 --leave-free 2
+watchgpu start -g 0,1 -f 2 -n
+watchgpu start -g 0,1 -f 2
 ```
 
 Capacity values without a unit are GiB, including decimals. `2`, `2.5`, `2GiB`, and `2560MiB` are valid.
+The older long option names remain compatible for scripts, including `--leave-free`,
+`--memory-per-gpu`, and `--maintenance-cpu-target`; new examples use the shorter names.
 
 Launch a managed single-GPU task:
 
 ```bash
 watchgpu-run \
-  --task resnet-training \
-  --nproc-per-node=1 \
-  --memory-per-gpu=12 \
-  --devices=0 \
+  -t resnet-training \
+  -n 1 \
+  -m 12 \
+  -d 0 \
   train.py --config configs/resnet.yaml
 ```
 
@@ -86,10 +88,10 @@ When the peak is unknown, use `auto` for an initial profiling run:
 
 ```bash
 watchgpu-run \
-  --task resnet-training \
-  --nproc-per-node=1 \
-  --memory-per-gpu=auto \
-  --devices=0 \
+  -t resnet-training \
+  -n 1 \
+  -m auto \
+  -d 0 \
   train.py --config configs/resnet.yaml
 ```
 
@@ -103,10 +105,10 @@ Run the included bounded CUDA smoke workload for an end-to-end check:
 
 ```bash
 watchgpu-run \
-  --task watchgpu-smoke \
-  --nproc-per-node=1 \
-  --memory-per-gpu=1 \
-  --devices=0 \
+  -t watchgpu-smoke \
+  -n 1 \
+  -m 1 \
+  -d 0 \
   examples/cuda_smoke_test.py --hold-mib 256 --steps 5
 ```
 
@@ -131,8 +133,8 @@ For the full model, see [Architecture](docs/architecture.md).
 ```bash
 watchgpu status
 watchgpu status --json
-watchgpu config set --leave-free 3 --runtime-only
-watchgpu config set --maintenance-cpu-target 25 --runtime-only
+watchgpu config set -f 3 --runtime-only
+watchgpu config set -c 25 --runtime-only
 watchgpu pause GPU-UUID
 watchgpu resume GPU-UUID
 watchgpu release GPU-UUID 2
@@ -143,12 +145,12 @@ WatchGPU uses user systemd when available and otherwise falls back to a detached
 
 See [Configuration](docs/configuration.md) and [Troubleshooting](docs/troubleshooting.md) for details.
 
-`--maintenance-cpu-target` configures transparent CPU health work for the whole
+`--cpu-target/-c` configures transparent CPU health work for the whole
 service on its shared affinity core: `0` (default) disables it, `50` targets
 about half a logical core, and `100` targets at most one logical core. Multiple
 GPU workers split this target instead of multiplying it. The work is bounded
 checksum computation, remains interruptible for IPC, and yields immediately for
-leases, pauses, shutdown, or the `--cpu-budget` hard limit. Status and Console
+leases, pauses, shutdown, or the `--cpu-limit/-b` hard limit. Status and Console
 show the configured target, observed process-tree usage, and maintenance state.
 
 Upgrade and removal procedures are documented in [Operations](docs/operations.md).

@@ -33,6 +33,18 @@ def test_root_help_exposes_main_operator_workflows() -> None:
     assert result.exit_code == 0
     for command in ("doctor", "start", "status", "console", "stop", "request"):
         assert command in result.stdout
+    assert "Release WatchGPU-owned memory" in result.stdout
+
+
+def test_config_help_uses_short_names_and_explains_cpu_controls() -> None:
+    result = CliRunner().invoke(app, ["config", "set", "--help"])
+
+    assert result.exit_code == 0
+    for option in ("--free", "--limit", "--duty", "--cpu-limit", "--cpu-target"):
+        assert option in result.stdout
+    assert "health-work" in result.stdout
+    assert "Hard CPU" in result.stdout
+    assert "--maintenance-cpu" not in result.stdout
 
 
 def test_start_dry_run_resolves_gpu_without_writing_config(
@@ -115,6 +127,47 @@ def test_config_set_submits_full_candidate_with_expected_revision(
     config = params["config"]
     assert isinstance(config, dict)
     assert config["gpus"][0]["leave_free_mib"] == 3072
+
+
+def test_config_set_short_cpu_alias_hot_applies_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def client_call(
+        _socket_path: Path,
+        method: str,
+        params: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        calls.append((method, params))
+        if method == "status.get":
+            return {
+                "policy": {
+                    "revision": 2,
+                    "config": WatchGPUConfig(
+                        gpus=[GPUConfig(selector="GPU-0")]
+                    ).model_dump(mode="json"),
+                }
+            }
+        return {"status": "APPLIED", "revision": 3}
+
+    monkeypatch.setattr(cli_module, "_client_call", client_call)
+    result = CliRunner().invoke(
+        app,
+        ["config", "set", "-c", "75", "--runtime-only"],
+        env={
+            "XDG_RUNTIME_DIR": str(tmp_path / "run"),
+            "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    params = calls[1][1]
+    assert params is not None
+    config = params["config"]
+    assert isinstance(config, dict)
+    assert config["maintenance_cpu_target_percent"] == 75
 
 
 def test_config_set_works_offline_and_persists_gpu_uuid(
