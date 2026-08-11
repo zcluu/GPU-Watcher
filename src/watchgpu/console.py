@@ -246,6 +246,12 @@ class PolicyEditScreen(ModalScreen[PolicySubmission | None]):
                 id="policy-cpu-budget",
                 type="integer",
             )
+            yield Static("CPU maintenance target (0-100% of one core)", classes="policy-label")
+            yield Input(
+                value=str(self._config.get("maintenance_cpu_target_percent", 0)),
+                id="policy-cpu-target",
+                type="integer",
+            )
             yield Static("F5: runtime only · Ctrl+S: apply and save")
             yield Static("", id="policy-error", markup=False)
             with Horizontal():
@@ -289,14 +295,19 @@ class PolicyEditScreen(ModalScreen[PolicySubmission | None]):
             )
             duty_cycle = int(self.query_one("#policy-duty-cycle", Input).value)
             cpu_budget = int(self.query_one("#policy-cpu-budget", Input).value)
+            cpu_target = int(self.query_one("#policy-cpu-target", Input).value)
             if not 1 <= duty_cycle <= 20:
                 raise ValueError("duty cycle must be between 1 and 20")
             if not 1 <= cpu_budget <= 100:
                 raise ValueError("CPU budget must be between 1 and 100")
+            if not 0 <= cpu_target <= 100:
+                raise ValueError("CPU maintenance target must be between 0 and 100")
             candidate = copy.deepcopy(self._config)
             candidate["leave_free_mib"] = leave_free
             candidate["maintenance_duty_cycle_percent"] = duty_cycle
             candidate["cpu_budget_percent"] = cpu_budget
+            if cpu_target or "maintenance_cpu_target_percent" in candidate:
+                candidate["maintenance_cpu_target_percent"] = cpu_target
             if self._selected_gpu_uuid != "all":
                 raw_limit = self.query_one("#policy-reserve-limit", Input).value.strip()
                 limit = None if not raw_limit else parse_user_capacity_mib(raw_limit)
@@ -990,6 +1001,8 @@ def _render_policy(snapshot: Mapping[str, Any]) -> str:
                 "Process-tree CPU",
                 f"Usage: {cpu.get('process_tree_percent', '-')}%",
                 f"Budget: {cpu.get('budget_percent', '-')}%",
+                f"Maintenance target: {cpu.get('maintenance_target_percent', '-')}%",
+                f"Maintenance state: {cpu.get('maintenance_state', '-')}",
                 f"Processes: {cpu.get('process_count', '-')}",
                 f"Affinity cores: {_join_values(cpu.get('affinity_cores'))}",
                 f"Worker threads: {cpu.get('worker_cpu_threads', '-')}",

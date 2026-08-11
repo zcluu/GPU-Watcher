@@ -33,6 +33,7 @@ Persisted configuration is normalized to integer MiB values for compatibility.
 | `maintenance_compute_enabled` | `true` | Enable bounded maintenance kernel |
 | `maintenance_duty_cycle_percent` | `5` | Maximum maintenance duty cycle |
 | `compute_pause_above_utilization` | `20` | Pause maintenance above external utilization |
+| `maintenance_cpu_target_percent` | `0` | Transparent CPU health work target, 0-100% of one logical core |
 | `cpu_budget_percent` | `100` | Whole WatchGPU process-tree CPU budget |
 
 Use `watchgpu config show` for the complete resolved configuration.
@@ -48,7 +49,14 @@ watchgpu config set --gpu GPU-UUID --leave-free 2 --reserve-limit 30
 
 # Change the managed set
 watchgpu config set --gpus GPU-UUID-1,GPU-UUID-2
+
+# Configure CPU health work without restarting
+watchgpu config set --maintenance-cpu-target 50 --runtime-only
 ```
+
+The target is for the complete WatchGPU service, not per GPU. When several
+workers share one affinity core, WatchGPU divides the target among them. It is
+always subordinate to `cpu_budget_percent`; `0` disables the workload.
 
 Policy updates use an expected revision so concurrent consoles cannot silently overwrite each other. The result is `APPLIED`, `PENDING`, or `REJECTED`.
 

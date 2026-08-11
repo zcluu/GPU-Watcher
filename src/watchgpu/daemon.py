@@ -97,6 +97,7 @@ class WatchGPUDaemon:
             percent=0.0, process_count=1, sampled_at=0.0
         )
         self._cpu_budget_percent = config.cpu_budget_percent
+        self._maintenance_cpu_target_percent = config.maintenance_cpu_target_percent
         self._cpu_affinity_cores = cpu_affinity_cores
         self._worker_cpu_threads = config.worker_cpu_threads
         restart_state = (
@@ -340,14 +341,23 @@ class WatchGPUDaemon:
         }
 
     def _cpu_status_payload(self) -> dict[str, object]:
+        over_budget = self._cpu_usage.percent > self._cpu_budget_percent
+        if self._maintenance_cpu_target_percent <= 0:
+            maintenance_state = "DISABLED"
+        elif over_budget:
+            maintenance_state = "THROTTLED"
+        else:
+            maintenance_state = "RUNNING"
         return {
             "process_tree_percent": round(self._cpu_usage.percent, 2),
             "process_count": self._cpu_usage.process_count,
             "sampled_at": self._cpu_usage.sampled_at,
             "budget_percent": self._cpu_budget_percent,
-            "over_budget": self._cpu_usage.percent > self._cpu_budget_percent,
+            "maintenance_target_percent": self._maintenance_cpu_target_percent,
+            "over_budget": over_budget,
             "affinity_cores": list(self._cpu_affinity_cores),
             "worker_cpu_threads": self._worker_cpu_threads,
+            "maintenance_state": maintenance_state,
         }
 
     def _runtime_status_payload(self) -> dict[str, object]:
@@ -359,6 +369,7 @@ class WatchGPUDaemon:
 
     def _update_cpu_config(self, config: WatchGPUConfig) -> None:
         self._cpu_budget_percent = config.cpu_budget_percent
+        self._maintenance_cpu_target_percent = config.maintenance_cpu_target_percent
         self._worker_cpu_threads = config.worker_cpu_threads
 
     def _journal_events(self) -> None:
@@ -588,6 +599,9 @@ def _default_worker_factory(
             maintenance_duty_cycle_percent=config.maintenance_duty_cycle_percent,
             compute_pause_above_utilization=config.compute_pause_above_utilization,
             cpu_budget_percent=config.cpu_budget_percent,
+            maintenance_cpu_target_percent=(
+                config.maintenance_cpu_target_percent / max(1, len(config.gpus))
+            ),
         )
     )
 

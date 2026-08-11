@@ -3,6 +3,33 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+class CPUMaintenanceDutyController:
+    """Convert a single-core CPU target into bounded work and sleep slices."""
+
+    def __init__(self, target_percent: float, *, period_seconds: float = 0.05) -> None:
+        if period_seconds <= 0:
+            raise ValueError("period_seconds must be positive")
+        self._period_seconds = period_seconds
+        self.update_target(target_percent)
+
+    @property
+    def target_percent(self) -> float:
+        return self._target_percent
+
+    @property
+    def work_seconds(self) -> float:
+        return self._period_seconds * self._target_percent / 100
+
+    @property
+    def sleep_seconds(self) -> float:
+        return self._period_seconds - self.work_seconds
+
+    def update_target(self, target_percent: float) -> None:
+        if not 0 <= target_percent <= 100:
+            raise ValueError("target_percent must be between 0 and 100")
+        self._target_percent = float(target_percent)
+
+
 class MaintenanceState(StrEnum):
     READY = "READY"
     RUNNING = "RUNNING"

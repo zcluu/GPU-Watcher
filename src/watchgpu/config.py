@@ -63,6 +63,7 @@ class WatchGPUConfig(BaseModel):
     maintenance_compute_enabled: bool = True
     maintenance_duty_cycle_percent: int = Field(default=5, ge=1, le=20)
     compute_pause_above_utilization: int = Field(default=20, ge=1, le=100)
+    maintenance_cpu_target_percent: int = Field(default=0, ge=0, le=100)
     cpu_budget_percent: int = Field(default=100, ge=1, le=100)
     worker_cpu_threads: int = Field(default=1, ge=1, le=8)
     cpu_affinity_cores: int = Field(default=1, ge=1, le=8)

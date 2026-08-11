@@ -44,6 +44,8 @@ class WorkerStatus:
     cpu_affinity_cores: tuple[int, ...] = ()
     worker_cpu_threads: int = 1
     maintenance_cpu_throttled: bool = False
+    maintenance_cpu_target_percent: float = 0.0
+    maintenance_cpu_active: bool = False
 
 
 class ManagedWorker(Protocol):
@@ -85,6 +87,7 @@ class ManagedWorker(Protocol):
         duty_cycle_percent: int,
         pause_above_utilization: int,
         cpu_budget_percent: int,
+        cpu_target_percent: float = 0.0,
     ) -> None: ...
 
 
@@ -138,8 +141,15 @@ class WorkerController:
         duty_cycle_percent: int,
         pause_above_utilization: int,
         cpu_budget_percent: int,
+        cpu_target_percent: float = 0.0,
     ) -> None:
-        del enabled, duty_cycle_percent, pause_above_utilization, cpu_budget_percent
+        del (
+            enabled,
+            duty_cycle_percent,
+            pause_above_utilization,
+            cpu_budget_percent,
+            cpu_target_percent,
+        )
 
     def tick(
         self,

@@ -365,6 +365,9 @@ def config_set(
     growth_stability: float | None = typer.Option(None, "--growth-stability"),
     duty_cycle: int | None = typer.Option(None, "--duty-cycle"),
     cpu_budget: int | None = typer.Option(None, "--cpu-budget"),
+    maintenance_cpu_target: int | None = typer.Option(
+        None, "--maintenance-cpu-target", min=0, max=100
+    ),
     maintenance_compute: bool | None = typer.Option(None, "--maintenance-compute"),
     save: bool = typer.Option(True, "--save/--runtime-only"),
 ) -> None:
@@ -387,6 +390,8 @@ def config_set(
         updates["maintenance_duty_cycle_percent"] = duty_cycle
     if cpu_budget is not None:
         updates["cpu_budget_percent"] = cpu_budget
+    if maintenance_cpu_target is not None:
+        updates["maintenance_cpu_target_percent"] = maintenance_cpu_target
     if maintenance_compute is not None:
         updates["maintenance_compute_enabled"] = maintenance_compute
     gpu_configs = [item.model_copy(deep=True) for item in candidate.gpus]
@@ -554,11 +559,6 @@ def _start_saved_config(config: WatchGPUConfig, paths: WatchGPUPaths) -> None:
         unit = render_systemd_user_unit(
             selection.executable,
             cpu_quota_percent=config.cpu_budget_percent,
-            environment={
-                "XDG_CONFIG_HOME": str(paths.config_dir.parent),
-                "XDG_STATE_HOME": str(paths.state_dir.parent),
-                "WATCHGPU_RUNTIME_DIR": str(paths.runtime_dir),
-            },
         )
         paths.systemd_unit_path.write_text(unit, encoding="utf-8")
         for command in (

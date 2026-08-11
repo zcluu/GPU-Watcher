@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import multiprocessing
 import os
 import threading
@@ -21,7 +22,7 @@ from watchgpu.allocator import (
 from watchgpu.models import GPUSnapshot
 from watchgpu.policy import ReservationLimits
 from watchgpu.worker import WorkerController, WorkerStatus
-from watchgpu.workload import MaintenanceDutyController
+from watchgpu.workload import CPUMaintenanceDutyController, MaintenanceDutyController
 
 
 class WorkerProcessError(RuntimeError):
@@ -95,10 +96,13 @@ class WorkerProcessSpec:
     maintenance_duty_cycle_percent: int = 5
     compute_pause_above_utilization: int = 20
     cpu_budget_percent: int = 100
+    maintenance_cpu_target_percent: float = 0.0
 
     def __post_init__(self) -> None:
         if self.worker_cpu_threads <= 0:
             raise ValueError("worker_cpu_threads must be positive")
+        if not 0 <= self.maintenance_cpu_target_percent <= 100:
+            raise ValueError("maintenance_cpu_target_percent must be between 0 and 100")
         if self.cpu_affinity_cores is not None and (
             not self.cpu_affinity_cores
             or len(self.cpu_affinity_cores) != len(set(self.cpu_affinity_cores))
@@ -216,6 +220,7 @@ class WorkerProcessProxy:
         duty_cycle_percent: int,
         pause_above_utilization: int,
         cpu_budget_percent: int,
+        cpu_target_percent: float = 0.0,
     ) -> None:
         self._exchange(
             "update_maintenance_policy",
@@ -224,6 +229,7 @@ class WorkerProcessProxy:
                 duty_cycle_percent,
                 pause_above_utilization,
                 cpu_budget_percent,
+                cpu_target_percent,
             ),
         )
 
@@ -310,20 +316,39 @@ def _worker_main(connection: Connection, spec: WorkerProcessSpec) -> None:
             allocation_tolerance_mib=spec.allocation_tolerance_mib,
         )
         duty = MaintenanceDutyController(spec.maintenance_duty_cycle_percent)
+        cpu_duty = CPUMaintenanceDutyController(
+            spec.maintenance_cpu_target_percent
+        )
         maintenance_enabled = spec.maintenance_compute_enabled
         pause_above_utilization = spec.compute_pause_above_utilization
         cpu_budget_percent = spec.cpu_budget_percent
         global_cpu_pressure = False
         gpu_utilization_percent = 0
         lease_blocked = False
+        cpu_maintenance_active = False
+        cpu_next_at = time.monotonic()
         last_wall = time.monotonic()
         last_cpu = time.process_time()
         connection.send(
-            ("ok", _worker_status(controller.status, spec, global_cpu_pressure))
+            (
+                "ok",
+                _worker_status(
+                    controller.status,
+                    spec,
+                    global_cpu_pressure,
+                    cpu_maintenance_active,
+                    cpu_duty.target_percent,
+                ),
+            )
         )
         while True:
-            poll_timeout = duty.next_delay_seconds or 0.1
-            if not connection.poll(min(max(poll_timeout, 0.01), 1.0)):
+            now = time.monotonic()
+            cpu_delay = max(0.0, cpu_next_at - now)
+            poll_timeout = min(
+                duty.next_delay_seconds or 0.1,
+                cpu_delay if cpu_duty.target_percent > 0 else 0.1,
+            )
+            if not connection.poll(min(max(poll_timeout, 0.001), 1.0)):
                 current_wall = time.monotonic()
                 current_cpu = time.process_time()
                 wall_delta = max(current_wall - last_wall, 1e-9)
@@ -334,6 +359,7 @@ def _worker_main(connection: Connection, spec: WorkerProcessSpec) -> None:
                     enabled=(
                         maintenance_enabled
                         and controller.status.held_mib > 0
+                        and controller.status.state.name not in {"PAUSED", "STOPPED"}
                         and not global_cpu_pressure
                     ),
                     lease_blocked=lease_blocked,
@@ -346,6 +372,18 @@ def _worker_main(connection: Connection, spec: WorkerProcessSpec) -> None:
                     started = time.monotonic()
                     if controller.maintenance_step():
                         duty.record_compute_slice(max(time.monotonic() - started, 1e-6))
+                cpu_maintenance_active = False
+                if (
+                    allowed
+                    and cpu_duty.target_percent > 0
+                    and time.monotonic() >= cpu_next_at
+                ):
+                    slice_started = time.monotonic()
+                    _run_cpu_health_slice(cpu_duty.work_seconds)
+                    cpu_maintenance_active = True
+                    cpu_next_at = slice_started + (
+                        cpu_duty.work_seconds + cpu_duty.sleep_seconds
+                    )
                 continue
 
             command, payload = connection.recv()
@@ -388,21 +426,36 @@ def _worker_main(connection: Connection, spec: WorkerProcessSpec) -> None:
                     duty_cycle_percent,
                     pause_above_utilization,
                     cpu_budget_percent,
-                ) = cast(tuple[bool, int, int, int], payload)
+                    cpu_target_percent,
+                ) = cast(tuple[bool, int, int, int, float], payload)
                 duty.update_duty_cycle(duty_cycle_percent)
+                cpu_duty.update_target(cpu_target_percent)
+                cpu_next_at = time.monotonic()
                 status = controller.status
             elif command == "set_cpu_pressure":
                 global_cpu_pressure = cast(bool, payload)
                 status = controller.status
             elif command == "stop":
                 status = _worker_status(
-                    controller.stop(), spec, global_cpu_pressure
+                    controller.stop(), spec, global_cpu_pressure, False,
+                    cpu_duty.target_percent,
                 )
                 connection.send(("ok", status))
                 return
             else:
                 raise WorkerProcessError(f"unknown worker command: {command}")
-            connection.send(("ok", _worker_status(status, spec, global_cpu_pressure)))
+            connection.send(
+                (
+                    "ok",
+                    _worker_status(
+                        status,
+                        spec,
+                        global_cpu_pressure,
+                        cpu_maintenance_active,
+                        cpu_duty.target_percent,
+                    ),
+                )
+            )
     except EOFError:
         return
     except BaseException as exc:
@@ -433,14 +486,33 @@ def _configure_process_environment(spec: WorkerProcessSpec) -> None:
 
 
 def _worker_status(
-    status: WorkerStatus, spec: WorkerProcessSpec, global_cpu_pressure: bool
+    status: WorkerStatus,
+    spec: WorkerProcessSpec,
+    global_cpu_pressure: bool,
+    cpu_maintenance_active: bool,
+    cpu_target_percent: float,
 ) -> WorkerStatus:
     return replace(
         status,
         cpu_affinity_cores=spec.cpu_affinity_cores or (),
         worker_cpu_threads=spec.worker_cpu_threads,
         maintenance_cpu_throttled=global_cpu_pressure,
+        maintenance_cpu_target_percent=cpu_target_percent,
+        maintenance_cpu_active=cpu_maintenance_active,
     )
+
+
+def _run_cpu_health_slice(duration_seconds: float) -> bytes:
+    """Exercise one CPU with repeatable checksum work for a bounded duration."""
+
+    if duration_seconds <= 0:
+        return b""
+    payload = b"watchgpu-cpu-health-check\0" * 4096
+    digest = b""
+    deadline = time.monotonic() + duration_seconds
+    while time.monotonic() < deadline:
+        digest = hashlib.sha256(payload + digest).digest()
+    return digest
 
 
 def _read_process_tree_cpu_times(root_pid: int) -> dict[tuple[int, float], float]:

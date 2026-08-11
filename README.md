@@ -132,6 +132,7 @@ For the full model, see [Architecture](docs/architecture.md).
 watchgpu status
 watchgpu status --json
 watchgpu config set --leave-free 3 --runtime-only
+watchgpu config set --maintenance-cpu-target 25 --runtime-only
 watchgpu pause GPU-UUID
 watchgpu resume GPU-UUID
 watchgpu release GPU-UUID 2
@@ -141,6 +142,14 @@ watchgpu stop --release
 WatchGPU uses user systemd when available and otherwise falls back to a detached process. If user lingering is disabled, the detached process may remain tied to the login session; this is reported as `SESSION_BOUND`.
 
 See [Configuration](docs/configuration.md) and [Troubleshooting](docs/troubleshooting.md) for details.
+
+`--maintenance-cpu-target` configures transparent CPU health work for the whole
+service on its shared affinity core: `0` (default) disables it, `50` targets
+about half a logical core, and `100` targets at most one logical core. Multiple
+GPU workers split this target instead of multiplying it. The work is bounded
+checksum computation, remains interruptible for IPC, and yields immediately for
+leases, pauses, shutdown, or the `--cpu-budget` hard limit. Status and Console
+show the configured target, observed process-tree usage, and maintenance state.
 
 Upgrade and removal procedures are documented in [Operations](docs/operations.md).
 

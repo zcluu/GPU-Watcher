@@ -457,6 +457,9 @@ class Supervisor:
             raise ValueError(
                 f"config references unmanaged GPUs: {', '.join(sorted(unknown))}"
             )
+        worker_cpu_target = config.maintenance_cpu_target_percent / max(
+            1, len(self._workers)
+        )
         for gpu_uuid, worker in self._workers.items():
             override = overrides.get(gpu_uuid)
             worker.update_policy(
@@ -479,6 +482,7 @@ class Supervisor:
                 duty_cycle_percent=config.maintenance_duty_cycle_percent,
                 pause_above_utilization=config.compute_pause_above_utilization,
                 cpu_budget_percent=config.cpu_budget_percent,
+                cpu_target_percent=worker_cpu_target,
             )
         self.tick(now=now)
         self._record_event("POLICY_UPDATED", "runtime policy updated")

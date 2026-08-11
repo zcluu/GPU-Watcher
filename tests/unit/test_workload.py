@@ -3,7 +3,28 @@ from __future__ import annotations
 import pytest
 
 from watchgpu.worker_process import ProcessTreeCPUMonitor
-from watchgpu.workload import MaintenanceDutyController, MaintenanceState
+from watchgpu.workload import (
+    CPUMaintenanceDutyController,
+    MaintenanceDutyController,
+    MaintenanceState,
+)
+
+
+@pytest.mark.parametrize("target", [0, 50, 100])
+def test_cpu_maintenance_target_is_bounded_to_one_core(target: int) -> None:
+    controller = CPUMaintenanceDutyController(target)
+    assert controller.target_percent == target
+    assert 0 <= controller.work_seconds <= 0.05
+    assert controller.sleep_seconds >= 0
+
+
+def test_cpu_maintenance_target_can_be_changed_at_runtime() -> None:
+    controller = CPUMaintenanceDutyController(50)
+    assert controller.work_seconds == pytest.approx(controller.sleep_seconds)
+    controller.update_target(100)
+    assert controller.sleep_seconds == pytest.approx(0)
+    controller.update_target(0)
+    assert controller.work_seconds == pytest.approx(0)
 
 
 def test_duty_controller_converts_compute_time_to_blocking_wait() -> None:
