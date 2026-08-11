@@ -148,13 +148,15 @@ def parse_launch_args(argv: Sequence[str]) -> LaunchConfig:
         "--memory",
         "-m",
         dest="memory_per_gpu",
+        metavar="MEMORY",
         default="auto",
         help="Memory per GPU; bare values are GiB, or use 'auto' (default).",
     )
-    parser.add_argument("--memory-per-gpu", dest="memory_per_gpu", help=argparse.SUPPRESS)
     parser.add_argument(
-        "--devices",
-        "-d",
+        "--gpus",
+        "-g",
+        dest="devices",
+        metavar="GPUS",
         help="Allowed GPU indices/UUIDs, comma-separated; omit for any managed GPU.",
     )
     parser.add_argument(
@@ -164,19 +166,12 @@ def parse_launch_args(argv: Sequence[str]) -> LaunchConfig:
         default=600.0,
         help="Lease heartbeat timeout in seconds (default: 600).",
     )
-    parser.add_argument("--ttl-seconds", dest="ttl_seconds", type=float, help=argparse.SUPPRESS)
     parser.add_argument(
         "--wait",
         dest="lease_timeout_seconds",
         type=float,
         default=3600.0,
         help="Maximum seconds to wait for the lease (default: 3600).",
-    )
-    parser.add_argument(
-        "--lease-timeout-seconds",
-        dest="lease_timeout_seconds",
-        type=float,
-        help=argparse.SUPPRESS,
     )
     parser.add_argument("training_script", help="Python training script to run after the lease is active.")
     parser.add_argument(
@@ -193,7 +188,7 @@ def parse_launch_args(argv: Sequence[str]) -> LaunchConfig:
     devices = _parse_devices(values.devices)
     if devices is not None and len(devices) < values.nproc_per_node:
         raise LauncherConfigurationError(
-            "--devices must contain at least --nproc-per-node selectors"
+            "--gpus/-g must contain at least --nproc-per-node selectors"
         )
     memory = _parse_memory_setting(values.memory_per_gpu)
     return LaunchConfig(
@@ -426,12 +421,12 @@ def _parse_devices(value: object) -> tuple[str, ...] | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise LauncherConfigurationError("--devices must be comma separated")
+        raise LauncherConfigurationError("--gpus/-g must be comma separated")
     devices = tuple(item.strip() for item in value.split(",") if item.strip())
     if not devices:
-        raise LauncherConfigurationError("--devices cannot be empty")
+        raise LauncherConfigurationError("--gpus/-g cannot be empty")
     if len(set(devices)) != len(devices):
-        raise LauncherConfigurationError("--devices cannot contain duplicates")
+        raise LauncherConfigurationError("--gpus/-g cannot contain duplicates")
     return devices
 
 

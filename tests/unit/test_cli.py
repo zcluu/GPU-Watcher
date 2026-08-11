@@ -47,6 +47,21 @@ def test_config_help_uses_short_names_and_explains_cpu_controls() -> None:
     assert "--maintenance-cpu" not in result.stdout
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["start", "-g", "0", "--leave-free", "2", "--dry-run"],
+        ["config", "set", "--cpu-budget", "80"],
+        ["config", "set", "--maintenance-cpu-target", "50"],
+    ],
+)
+def test_removed_cli_option_names_are_rejected(arguments: list[str]) -> None:
+    result = CliRunner().invoke(app, arguments)
+
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+
+
 def test_start_dry_run_resolves_gpu_without_writing_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -64,7 +79,7 @@ def test_start_dry_run_resolves_gpu_without_writing_config(
     config_home = tmp_path / "config"
     result = CliRunner().invoke(
         app,
-        ["start", "--gpus", "0", "--leave-free", "2.5", "--dry-run"],
+        ["start", "--gpus", "0", "--free", "2.5", "--dry-run"],
         env={
             "XDG_RUNTIME_DIR": str(tmp_path / "run"),
             "XDG_CONFIG_HOME": str(config_home),
@@ -106,9 +121,9 @@ def test_config_set_submits_full_candidate_with_expected_revision(
         [
             "config",
             "set",
-            "--gpu",
+            "--gpus",
             "GPU-0",
-            "--leave-free",
+            "--free",
             "3GiB",
             "--runtime-only",
         ],
@@ -344,9 +359,7 @@ def test_config_set_works_offline_and_persists_gpu_uuid(
             "set",
             "--gpus",
             "0",
-            "--gpu",
-            "0",
-            "--reserve-limit",
+            "--limit",
             "16MiB",
         ],
         env=env,
@@ -356,6 +369,51 @@ def test_config_set_works_offline_and_persists_gpu_uuid(
     saved = load_config(tmp_path / "config" / "watchgpu" / "config.toml")
     assert saved.gpus == [
         GPUConfig(selector="GPU-host", reserve_limit_mib=16)
+    ]
+
+
+def test_gpu_control_options_resolve_indices_and_use_memory_consistently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeObserver:
+        def __enter__(self) -> FakeObserver:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def snapshots(self) -> tuple[GPUSnapshot, ...]:
+            return (
+                GPUSnapshot(0, "GPU-0", "A40", 46_068, 20_000, 0),
+                GPUSnapshot(1, "GPU-1", "A40", 46_068, 20_000, 0),
+            )
+
+    calls: list[tuple[str, dict[str, object] | None]] = []
+    monkeypatch.setattr(cli_module, "NVMLGPUObserver", FakeObserver)
+    monkeypatch.setattr(
+        cli_module,
+        "_client_call",
+        lambda _path, method, params=None: (
+            calls.append((method, params)) or {"status": "APPLIED"}
+        ),
+    )
+    env = {
+        "XDG_RUNTIME_DIR": str(tmp_path / "run"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+
+    paused = CliRunner().invoke(app, ["pause", "-g", "1"], env=env)
+    released = CliRunner().invoke(
+        app, ["release", "-g", "0,1", "-m", "2"], env=env
+    )
+
+    assert paused.exit_code == 0, paused.output
+    assert released.exit_code == 0, released.output
+    assert calls == [
+        ("worker.pause", {"gpu_uuid": "GPU-1"}),
+        ("worker.release", {"gpu_uuid": "GPU-0", "memory_mib": 2048}),
+        ("worker.release", {"gpu_uuid": "GPU-1", "memory_mib": 2048}),
     ]
 
 
@@ -381,7 +439,7 @@ def test_restart_schedule_can_be_set_shown_and_disabled_while_stopped(
             "04:00",
             "--jitter",
             "20m",
-            "--defer-while-leased",
+            "--defer",
         ],
         env=env,
     )

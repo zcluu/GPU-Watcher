@@ -50,10 +50,10 @@ watchgpu config set maintenance_compute_enabled false
 watchgpu config set -f 3 --runtime-only
 
 # Apply and persist
-watchgpu config set -g GPU-UUID -f 2 -r 30
+watchgpu config set -g GPU-UUID -f 2 -l 30
 
 # Change the managed set
-watchgpu config set --gpus GPU-UUID-1,GPU-UUID-2
+watchgpu config set gpus GPU-UUID-1,GPU-UUID-2
 
 # Configure CPU health work without restarting
 watchgpu config set -c 50 --runtime-only

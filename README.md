@@ -65,13 +65,11 @@ watchgpu doctor
 Preview the policy without allocating memory, then start the service:
 
 ```bash
-watchgpu start -g 0,1 -f 2 -n
+watchgpu start -g 0,1 -f 2 --dry-run
 watchgpu start -g 0,1 -f 2
 ```
 
 Capacity values without a unit are GiB, including decimals. `2`, `2.5`, `2GiB`, and `2560MiB` are valid.
-The older long option names remain compatible for scripts, including `--leave-free`,
-`--memory-per-gpu`, and `--maintenance-cpu-target`; new examples use the shorter names.
 
 Launch a managed single-GPU task:
 
@@ -80,7 +78,7 @@ watchgpu-run \
   -t resnet-training \
   -n 1 \
   -m 12 \
-  -d 0 \
+  -g 0 \
   train.py --config configs/resnet.yaml
 ```
 
@@ -91,7 +89,7 @@ watchgpu-run \
   -t resnet-training \
   -n 1 \
   -m auto \
-  -d 0 \
+  -g 0 \
   train.py --config configs/resnet.yaml
 ```
 
@@ -108,7 +106,7 @@ watchgpu-run \
   -t watchgpu-smoke \
   -n 1 \
   -m 1 \
-  -d 0 \
+  -g 0 \
   examples/cuda_smoke_test.py --hold-mib 256 --steps 5
 ```
 
@@ -141,9 +139,9 @@ watchgpu config set maintenance_compute_enabled false
 # Shortcuts remain available for frequent changes
 watchgpu config set -f 3 --runtime-only
 watchgpu config set -c 25 --runtime-only
-watchgpu pause GPU-UUID
-watchgpu resume GPU-UUID
-watchgpu release GPU-UUID 2
+watchgpu pause -g GPU-UUID
+watchgpu resume -g GPU-UUID
+watchgpu release -g GPU-UUID -m 2
 watchgpu stop --release
 ```
 

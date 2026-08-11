@@ -13,7 +13,7 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import typer
 
@@ -43,8 +43,6 @@ from watchgpu.paths import WatchGPUPaths
 from watchgpu.profile import ProfileStore
 from watchgpu.sdk import GroupMemoryRequest, acquire
 from watchgpu.units import parse_user_capacity_mib
-
-T = TypeVar("T")
 
 _HELP_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
@@ -146,40 +144,30 @@ def start(
         "-f",
         help="Memory to leave free on each GPU; bare values are GiB.",
     ),
-    leave_free_legacy: str | None = typer.Option(None, "--leave-free", hidden=True),
     background: str | None = typer.Option(
         None,
         "--background",
         "-b",
         help="Run mode: auto, systemd-user, detached, or foreground.",
     ),
-    background_mode_legacy: str | None = typer.Option(
-        None, "--background-mode", hidden=True
-    ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", "-n", help="Preview resolved settings without starting."
+        False, "--dry-run", help="Preview resolved settings without starting."
     ),
 ) -> None:
     paths = WatchGPUPaths.discover()
     paths.ensure_directories()
     try:
-        leave_free = _coalesce_legacy_option(
-            free_memory, leave_free_legacy, "--free", "--leave-free"
-        )
-        selected_background = _coalesce_legacy_option(
-            background, background_mode_legacy, "--background", "--background-mode"
-        )
         parsed_mode = (
             None
-            if selected_background is None
-            else BackgroundMode(selected_background)
+            if background is None
+            else BackgroundMode(background)
         )
     except ValueError as exc:
         raise typer.BadParameter(
-            f"unsupported background mode: {selected_background}"
+            f"unsupported background mode: {background}"
         ) from exc
     config = _resolved_start_config(
-        paths, gpus=gpus, leave_free=leave_free, mode=parsed_mode
+        paths, gpus=gpus, leave_free=free_memory, mode=parsed_mode
     )
     _print_start_preview(config)
     if dry_run:
@@ -254,36 +242,50 @@ def console_command() -> None:
 
 @app.command(help="Pause reservation work and release memory; omit GPU for all.")
 def pause(
-    gpu: str | None = typer.Argument(None, help="Managed GPU UUID or 'all'; omit for all."),
+    gpus: str | None = typer.Option(
+        None, "--gpus", "-g", help="GPU indices/UUIDs, comma-separated; omit for all."
+    ),
 ) -> None:
-    _control("worker.pause", gpu_uuid=gpu)
+    _control_gpus("worker.pause", gpus)
 
 
 @app.command(help="Resume reservation work; omit GPU for all.")
 def resume(
-    gpu: str | None = typer.Argument(None, help="Managed GPU UUID or 'all'; omit for all."),
+    gpus: str | None = typer.Option(
+        None, "--gpus", "-g", help="GPU indices/UUIDs, comma-separated; omit for all."
+    ),
 ) -> None:
-    _control("worker.resume", gpu_uuid=gpu)
+    _control_gpus("worker.resume", gpus)
 
 
 @app.command(
     help="Release WatchGPU-owned memory without stopping training; it may regrow after stability."
 )
 def release(
-    gpu: str | None = typer.Argument(None, help="Managed GPU UUID or 'all'; omit for all."),
-    memory: str | None = typer.Argument(
-        None, help="Amount to release; bare values are GiB. Omit for all held memory."
+    gpus: str | None = typer.Option(
+        None, "--gpus", "-g", help="GPU indices/UUIDs, comma-separated; omit for all."
+    ),
+    memory: str | None = typer.Option(
+        None,
+        "--memory",
+        "-m",
+        help="Amount to release per GPU; bare values are GiB. Omit for all held memory.",
     ),
 ) -> None:
-    params: dict[str, Any] = {}
-    if gpu is not None:
-        params["gpu_uuid"] = gpu
-    if memory is not None:
-        params["memory_mib"] = parse_user_capacity_mib(memory)
-    _print_data(
-        _client_call(WatchGPUPaths.discover().socket_path, "worker.release", params),
-        json_output=False,
-    )
+    memory_mib = None if memory is None else parse_user_capacity_mib(memory)
+    targets = _control_gpu_uuids(gpus)
+    for gpu_uuid in targets:
+        params: dict[str, Any] = {}
+        if gpu_uuid is not None:
+            params["gpu_uuid"] = gpu_uuid
+        if memory_mib is not None:
+            params["memory_mib"] = memory_mib
+        _print_data(
+            _client_call(
+                WatchGPUPaths.discover().socket_path, "worker.release", params
+            ),
+            json_output=False,
+        )
 
 
 @app.command(help="Acquire and immediately release a lease (diagnostic command).")
@@ -295,34 +297,24 @@ def request(
         "-m",
         help="Required memory per GPU; bare values are GiB.",
     ),
-    memory_per_gpu_legacy: str | None = typer.Option(
-        None, "--memory-per-gpu", hidden=True
-    ),
     count: int = typer.Option(1, "--count", "-n", min=1, help="Number of GPUs."),
-    devices: str | None = typer.Option(
-        None, "--devices", "-d", help="Allowed GPU indices/UUIDs, comma-separated."
+    gpus: str | None = typer.Option(
+        None, "--gpus", "-g", help="Allowed GPU indices/UUIDs, comma-separated."
     ),
     ttl_seconds: float = typer.Option(
         600.0, "--ttl", min=0.001, help="Lease heartbeat timeout in seconds."
     ),
-    ttl_seconds_legacy: float | None = typer.Option(None, "--ttl-seconds", hidden=True),
 ) -> None:
-    selected_memory = _coalesce_legacy_option(
-        memory, memory_per_gpu_legacy, "--memory", "--memory-per-gpu"
-    )
-    if selected_memory is None:
+    if memory is None:
         raise typer.BadParameter("--memory/-m is required")
-    selected_ttl = 600.0 if ttl_seconds_legacy is None else ttl_seconds_legacy
-    if ttl_seconds != 600.0 and ttl_seconds_legacy is not None:
-        raise typer.BadParameter("use only one of --ttl and --ttl-seconds")
-    selectors = None if devices is None else _split_selectors(devices)
+    selectors = None if gpus is None else _split_selectors(gpus)
     with acquire(
         GroupMemoryRequest(
             task_name=task,
             count=count,
-            mib_per_gpu=parse_user_capacity_mib(selected_memory),
+            mib_per_gpu=parse_user_capacity_mib(memory),
             devices=selectors,
-            ttl_seconds=selected_ttl,
+            ttl_seconds=ttl_seconds,
         ),
         socket_path=WatchGPUPaths.discover().socket_path,
     ) as lease:
@@ -418,21 +410,10 @@ def restart_schedule_set(
         "--defer/--no-defer",
         help="Delay today's restart while a managed lease is active.",
     ),
-    defer_while_leased_legacy: bool | None = typer.Option(
-        None,
-        "--defer-while-leased/--do-not-defer-while-leased",
-        hidden=True,
-    ),
 ) -> None:
     paths = WatchGPUPaths.discover()
     config, revision, running = _schedule_edit_base(paths)
     current = config.maintenance_restart
-    defer = _coalesce_legacy_option(
-        defer,
-        defer_while_leased_legacy,
-        "--defer",
-        "--defer-while-leased",
-    )
     try:
         updated = MaintenanceRestartConfig(
             enabled=True,
@@ -480,54 +461,36 @@ def config_set(
     free_memory: str | None = typer.Option(
         None, "--free", "-f", help="Free memory to keep; bare values are GiB."
     ),
-    leave_free_legacy: str | None = typer.Option(None, "--leave-free", hidden=True),
-    gpu: str | None = typer.Option(
-        None, "--gpu", "-g", help="GPU receiving --free/--limit."
-    ),
     gpus: str | None = typer.Option(
-        None, "--gpus", "-G", help="Replace managed GPUs with this comma-separated list."
+        None,
+        "--gpus",
+        "-g",
+        help="GPU indices/UUIDs receiving --free/--limit, comma-separated.",
     ),
     limit: str | None = typer.Option(
-        None, "--limit", "-r", help="Maximum reservation; bare values are GiB."
-    ),
-    reserve_limit_legacy: str | None = typer.Option(
-        None, "--reserve-limit", hidden=True
+        None, "--limit", "-l", help="Maximum reservation; bare values are GiB."
     ),
     poll_interval: float | None = typer.Option(
         None, "--poll", "-p", min=0.001, help="GPU polling interval in seconds."
     ),
-    poll_interval_legacy: float | None = typer.Option(
-        None, "--poll-interval", hidden=True
-    ),
     growth_stability: float | None = typer.Option(
         None, "--stability", "-s", min=0, help="Seconds free memory must remain stable before growth."
-    ),
-    growth_stability_legacy: float | None = typer.Option(
-        None, "--growth-stability", hidden=True
     ),
     duty_cycle: int | None = typer.Option(
         None, "--duty", "-d", min=1, max=20, help="GPU maintenance duty cycle, 1-20%."
     ),
-    duty_cycle_legacy: int | None = typer.Option(None, "--duty-cycle", hidden=True),
     cpu_limit: int | None = typer.Option(
         None, "--cpu-limit", "-b", min=1, max=100, help="Hard CPU limit, % of one core."
     ),
-    cpu_budget_legacy: int | None = typer.Option(None, "--cpu-budget", hidden=True),
     cpu_target: int | None = typer.Option(
         None, "--cpu-target", "-c", min=0, max=100,
         help="CPU health-work target, % of one core; 0 disables it."
     ),
-    cpu_target_legacy: int | None = typer.Option(
-        None, "--maintenance-cpu-target", min=0, max=100, hidden=True
-    ),
     maintenance_compute: bool | None = typer.Option(
         None,
         "--gpu-work/--no-gpu-work",
-        "-m/-M",
+        "-w/-W",
         help="Enable/disable the low-duty GPU maintenance kernel.",
-    ),
-    maintenance_compute_legacy: bool | None = typer.Option(
-        None, "--maintenance-compute/--no-maintenance-compute", hidden=True
     ),
     save: bool = typer.Option(
         True,
@@ -549,57 +512,18 @@ def config_set(
         config_key, config_value = config_key.split("=", 1)
     if (config_key is None) != (config_value is None):
         raise typer.BadParameter("config-key mode requires both CONFIG_KEY and VALUE")
-    leave_free = _coalesce_legacy_option(
-        free_memory, leave_free_legacy, "--free", "--leave-free"
-    )
-    reserve_limit = _coalesce_legacy_option(
-        limit, reserve_limit_legacy, "--limit", "--reserve-limit"
-    )
-    poll_interval = _coalesce_legacy_option(
-        poll_interval, poll_interval_legacy, "--poll", "--poll-interval"
-    )
-    growth_stability = _coalesce_legacy_option(
-        growth_stability,
-        growth_stability_legacy,
-        "--stability",
-        "--growth-stability",
-    )
-    duty_cycle = _coalesce_legacy_option(
-        duty_cycle, duty_cycle_legacy, "--duty", "--duty-cycle"
-    )
-    cpu_budget = _coalesce_legacy_option(
-        cpu_limit, cpu_budget_legacy, "--cpu-limit", "--cpu-budget"
-    )
-    cpu_target = _coalesce_legacy_option(
-        cpu_target, cpu_target_legacy, "--cpu-target", "--maintenance-cpu-target"
-    )
-    maintenance_compute = _coalesce_legacy_option(
-        maintenance_compute,
-        maintenance_compute_legacy,
-        "--gpu-work",
-        "--maintenance-compute",
-    )
     shortcut_supplied = any(
         value is not None
         for value in (
             free_memory,
-            leave_free_legacy,
-            gpu,
             gpus,
             limit,
-            reserve_limit_legacy,
             poll_interval,
-            poll_interval_legacy,
             growth_stability,
-            growth_stability_legacy,
             duty_cycle,
-            duty_cycle_legacy,
             cpu_limit,
-            cpu_budget_legacy,
             cpu_target,
-            cpu_target_legacy,
             maintenance_compute,
-            maintenance_compute_legacy,
         )
     )
     if config_key is not None and shortcut_supplied:
@@ -611,7 +535,11 @@ def config_set(
 
     if config_key is not None:
         try:
-            updates = _direct_config_update(config_key, config_value, running=running)
+            updates = _direct_config_update(
+                config_key,
+                config_value,
+                known_gpu_uuids=tuple(item.selector for item in candidate.gpus),
+            )
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
     else:
@@ -622,42 +550,39 @@ def config_set(
             updates["growth_stability_seconds"] = growth_stability
         if duty_cycle is not None:
             updates["maintenance_duty_cycle_percent"] = duty_cycle
-        if cpu_budget is not None:
-            updates["cpu_budget_percent"] = cpu_budget
+        if cpu_limit is not None:
+            updates["cpu_budget_percent"] = cpu_limit
         if cpu_target is not None:
             updates["maintenance_cpu_target_percent"] = cpu_target
         if maintenance_compute is not None:
             updates["maintenance_compute_enabled"] = maintenance_compute
         gpu_configs = [item.model_copy(deep=True) for item in candidate.gpus]
         if gpus is not None:
-            selectors = _split_selectors(gpus)
-            if not running:
-                with NVMLGPUObserver() as observer:
-                    selectors = tuple(
-                        item.uuid
-                        for item in resolve_gpu_selectors(observer.snapshots(), selectors)
-                    )
-            gpu_configs = [GPUConfig(selector=selector) for selector in selectors]
-        if gpu is None:
-            if leave_free is not None:
-                updates["leave_free_mib"] = parse_user_capacity_mib(leave_free)
-            if reserve_limit is not None:
-                raise typer.BadParameter("--limit/-r requires --gpu/-g")
+            selectors = _resolve_gpu_selectors(
+                gpus, known_gpu_uuids=tuple(item.selector for item in candidate.gpus)
+            )
+            if free_memory is None and limit is None:
+                gpu_configs = [GPUConfig(selector=selector) for selector in selectors]
+            else:
+                by_selector = {item.selector: item for item in gpu_configs}
+                for selector in selectors:
+                    selected = by_selector.get(selector, GPUConfig(selector=selector))
+                    selected_updates: dict[str, Any] = {}
+                    if free_memory is not None:
+                        selected_updates["leave_free_mib"] = parse_user_capacity_mib(
+                            free_memory
+                        )
+                    if limit is not None:
+                        selected_updates["reserve_limit_mib"] = parse_user_capacity_mib(
+                            limit
+                        )
+                    by_selector[selector] = selected.model_copy(update=selected_updates)
+                gpu_configs = list(by_selector.values())
         else:
-            if not running:
-                with NVMLGPUObserver() as observer:
-                    gpu = resolve_gpu_selectors(observer.snapshots(), (gpu,))[0].uuid
-            by_selector = {item.selector: item for item in gpu_configs}
-            selected = by_selector.get(gpu, GPUConfig(selector=gpu))
-            selected_updates: dict[str, Any] = {}
-            if leave_free is not None:
-                selected_updates["leave_free_mib"] = parse_user_capacity_mib(leave_free)
-            if reserve_limit is not None:
-                selected_updates["reserve_limit_mib"] = parse_user_capacity_mib(
-                    reserve_limit
-                )
-            by_selector[gpu] = selected.model_copy(update=selected_updates)
-            gpu_configs = list(by_selector.values())
+            if free_memory is not None:
+                updates["leave_free_mib"] = parse_user_capacity_mib(free_memory)
+            if limit is not None:
+                raise typer.BadParameter("--limit/-l requires --gpus/-g")
         updates["gpus"] = gpu_configs
     candidate_values = candidate.model_dump(mode="python")
     candidate_values.update(updates)
@@ -1012,6 +937,17 @@ def _control(method: str, *, gpu_uuid: str | None) -> None:
     )
 
 
+def _control_gpu_uuids(gpus: str | None) -> tuple[str | None, ...]:
+    if gpus is None or gpus.strip() == "all":
+        return (None,)
+    return tuple(_resolve_gpu_selectors(gpus))
+
+
+def _control_gpus(method: str, gpus: str | None) -> None:
+    for gpu_uuid in _control_gpu_uuids(gpus):
+        _control(method, gpu_uuid=gpu_uuid)
+
+
 def _client_call(
     socket_path: Path, method: str, params: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -1027,27 +963,32 @@ def _split_selectors(value: str) -> tuple[str, ...]:
     return selectors
 
 
-def _coalesce_legacy_option(
-    current: T | None,
-    legacy: T | None,
-    current_name: str,
-    legacy_name: str,
-) -> T | None:
-    if current is not None and legacy is not None:
-        raise typer.BadParameter(f"use only one of {current_name} and {legacy_name}")
-    return current if current is not None else legacy
+def _resolve_gpu_selectors(
+    value: str, *, known_gpu_uuids: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    selectors = _split_selectors(value)
+    if selectors == ("all",) and known_gpu_uuids:
+        return known_gpu_uuids
+    if selectors and all(selector in known_gpu_uuids for selector in selectors):
+        return selectors
+    with NVMLGPUObserver() as observer:
+        return tuple(
+            snapshot.uuid
+            for snapshot in resolve_gpu_selectors(observer.snapshots(), selectors)
+        )
 
 
 def _direct_config_update(
-    key: str, value: str | None, *, running: bool
+    key: str,
+    value: str | None,
+    *,
+    known_gpu_uuids: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Parse the documented ``config set KEY VALUE`` form."""
 
     if value is None:
         raise typer.BadParameter("config-key mode requires a VALUE")
-    normalized_key = key.strip().replace("-", "_")
-    aliases = {"leave_free": "leave_free_mib"}
-    normalized_key = aliases.get(normalized_key, normalized_key)
+    normalized_key = key.strip()
     if normalized_key == "maintenance_restart":
         raise typer.BadParameter("use 'restart schedule set' for maintenance_restart")
     if normalized_key not in WatchGPUConfig.model_fields:
@@ -1055,13 +996,7 @@ def _direct_config_update(
             f"unknown config key: {key}; use 'watchgpu config show' to list keys"
         )
     if normalized_key == "gpus":
-        selectors = _split_selectors(value)
-        if not running:
-            with NVMLGPUObserver() as observer:
-                selectors = tuple(
-                    snapshot.uuid
-                    for snapshot in resolve_gpu_selectors(observer.snapshots(), selectors)
-                )
+        selectors = _resolve_gpu_selectors(value, known_gpu_uuids=known_gpu_uuids)
         return {"gpus": [GPUConfig(selector=selector) for selector in selectors]}
     if normalized_key == "leave_free_mib":
         return {normalized_key: parse_user_capacity_mib(value)}

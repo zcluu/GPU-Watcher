@@ -19,8 +19,8 @@ def test_watchgpu_run_parses_torchrun_style_resource_arguments() -> None:
             "--task",
             "llama-ft",
             "--nproc-per-node=2",
-            "--memory-per-gpu=24GiB",
-            "--devices=0,2",
+            "--memory=24GiB",
+            "--gpus=0,2",
             "train.py",
             "--config",
             "llama.yaml",
@@ -41,7 +41,7 @@ def test_watchgpu_run_rejects_multi_node_launches() -> None:
             [
                 "--task=distributed-job",
                 "--nnodes=2",
-                "--memory-per-gpu=8GiB",
+                "--memory=8GiB",
                 "train.py",
             ]
         )
@@ -49,7 +49,7 @@ def test_watchgpu_run_rejects_multi_node_launches() -> None:
 
 def test_watchgpu_run_treats_bare_memory_as_gib() -> None:
     config = parse_launch_args(
-        ["--task=test", "--memory-per-gpu=12.5", "train.py"]
+        ["--task=test", "--memory=12.5", "train.py"]
     )
 
     assert config.memory_per_gpu == 12_800
@@ -57,7 +57,7 @@ def test_watchgpu_run_treats_bare_memory_as_gib() -> None:
 
 def test_watchgpu_run_accepts_compact_launch_options() -> None:
     config = parse_launch_args(
-        ["-t", "test", "-n", "1", "-m", "2.5", "-d", "1", "test.py"]
+        ["-t", "test", "-n", "1", "-m", "2.5", "-g", "1", "test.py"]
     )
 
     assert config.task_name == "test"
@@ -65,6 +65,15 @@ def test_watchgpu_run_accepts_compact_launch_options() -> None:
     assert config.memory_per_gpu == 2560
     assert config.devices == ("1",)
     assert config.training_script == "test.py"
+
+
+@pytest.mark.parametrize(
+    "old_option",
+    ["--devices=0", "--memory-per-gpu=2", "--ttl-seconds=30"],
+)
+def test_watchgpu_run_rejects_removed_option_names(old_option: str) -> None:
+    with pytest.raises(LauncherConfigurationError, match="unrecognized arguments"):
+        parse_launch_args(["-t", "test", old_option, "test.py"])
 
 
 def test_auto_bootstrap_keeps_driver_headroom(tmp_path, monkeypatch) -> None:
