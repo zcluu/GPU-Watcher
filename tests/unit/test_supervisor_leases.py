@@ -19,7 +19,7 @@ from watchgpu.supervisor import (
     Supervisor,
     TrustingReleaseVerifier,
 )
-from watchgpu.worker import WorkerController, WorkerStatus
+from watchgpu.worker import WorkerAction, WorkerController, WorkerStatus
 
 
 def _worker(uuid: str, held_mib: int) -> WorkerController:
@@ -133,6 +133,93 @@ class MutableLeaseActivityVerifier:
 
     def is_active(self, lease: Lease) -> bool:
         return self.active
+
+
+def test_external_gpu_usage_never_releases_a_42_gib_reservation() -> None:
+    held_mib = 42 * 1024
+    total_mib = 46_068
+    allocator = InMemoryMemoryAllocator(chunk_mib=500)
+    allocator.reconcile(held_mib)
+    worker = WorkerController(
+        gpu_uuid="GPU-0",
+        allocator=allocator,
+        limits=ReservationLimits(
+            leave_free_mib=2 * 1024,
+            reserve_limit_mib=None,
+            reserve_ratio=None,
+        ),
+        growth_stability_seconds=0,
+        allocation_tolerance_mib=0,
+    )
+    observer = InMemoryGPUObserver(
+        (GPUSnapshot(0, "GPU-0", "A40", total_mib, 1000, 0),)
+    )
+    supervisor = Supervisor(
+        observer=observer,
+        workers={"GPU-0": worker},
+        release_verifier=TrustingReleaseVerifier(),
+    )
+
+    statuses: list[WorkerStatus] = []
+    for tick, free_mib in enumerate((1000, 500, 100, 0), start=1):
+        observer.replace(
+            (GPUSnapshot(0, "GPU-0", "A40", total_mib, free_mib, 100),)
+        )
+        statuses.extend(supervisor.tick(now=float(tick)))
+
+    assert all(status.action is WorkerAction.NOOP for status in statuses)
+    assert all(status.held_mib == held_mib for status in statuses)
+    assert worker.status.held_mib == held_mib
+    assert supervisor.leases == ()
+    assert not any(event.type == "RELEASE_VERIFY_FAILED" for event in supervisor.events)
+
+
+def test_active_lease_is_released_once_not_again_when_external_usage_grows() -> None:
+    held_mib = 42 * 1024
+    lease_mib = 2 * 1024
+    total_mib = 46_068
+    allocator = InMemoryMemoryAllocator(chunk_mib=500)
+    allocator.reconcile(held_mib)
+    worker = WorkerController(
+        gpu_uuid="GPU-0",
+        allocator=allocator,
+        limits=ReservationLimits(2 * 1024, None, None),
+        growth_stability_seconds=0,
+        allocation_tolerance_mib=0,
+    )
+    observer = InMemoryGPUObserver(
+        (GPUSnapshot(0, "GPU-0", "A40", total_mib, 1000, 0),)
+    )
+    supervisor = Supervisor(
+        observer=observer,
+        workers={"GPU-0": worker},
+        release_verifier=TrustingReleaseVerifier(),
+    )
+
+    lease = supervisor.request_lease(
+        GroupLeaseRequest(
+            request_id="sticky-active-lease",
+            task_name="training",
+            gpu_count=1,
+            memory_per_gpu_mib=lease_mib,
+            ttl_seconds=600,
+            client_pid=os.getpid(),
+        ),
+        now=0,
+    )
+    held_after_activation = held_mib - lease_mib
+    assert lease.state is LeaseState.ACTIVE
+    assert worker.status.held_mib == held_after_activation
+
+    for tick, free_mib in enumerate((500, 100, 0), start=1):
+        observer.replace(
+            (GPUSnapshot(0, "GPU-0", "A40", total_mib, free_mib, 100),)
+        )
+        status = supervisor.tick(now=float(tick))[0]
+        assert status.action is WorkerAction.NOOP
+        assert status.held_mib == held_after_activation
+
+    assert worker.status.held_mib == held_after_activation
 
 
 def test_group_lease_is_approved_atomically_and_is_idempotent() -> None:

@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- Release a managed training lease exactly once instead of subtracting its memory again on every supervisor poll.
+- Preserve a worker process and its reservation when a CUDA operation exceeds the RPC timeout; later calls drain the in-flight response after the worker recovers.
+- Keep a 42 GiB-style reservation stable while unrelated GPU memory usage increases.
+
 ## [0.1.0] - 2026-07-27
 
 ### Added

@@ -96,7 +96,7 @@ def test_one_crashed_worker_does_not_block_other_gpu_ticks() -> None:
     assert statuses[1].action is WorkerAction.WAIT_FOR_STABILITY
 
 
-def test_unresponsive_worker_rpc_times_out_and_only_terminates_that_worker() -> None:
+def test_unresponsive_worker_rpc_timeout_preserves_its_process_and_reservation() -> None:
     spec = WorkerProcessSpec(
         gpu_uuid="GPU-hung",
         chunk_mib=500,
@@ -119,7 +119,8 @@ def test_unresponsive_worker_rpc_times_out_and_only_terminates_that_worker() -> 
             _ = hung.status
 
         assert time.monotonic() - started < 1.0
-        assert not hung.is_alive()
+        assert hung.is_alive()
+        assert hung.status.gpu_uuid == "GPU-hung"
         assert healthy.is_alive()
         assert healthy.status.gpu_uuid == "GPU-healthy"
     finally:

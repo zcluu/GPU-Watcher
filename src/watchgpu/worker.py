@@ -168,18 +168,27 @@ class WorkerController:
         if self._state in {WorkerState.PAUSED, WorkerState.STOPPED}:
             return self.status
 
-        target_mib = max(
-            0,
-            calculate_target_hold_mib(
-                snapshot,
-                current_hold_mib=self._allocator.held_mib,
-                limits=self._limits,
-                preserve_current_hold=not self._policy_reconcile_pending,
-            )
-            - max(0, lease_headroom_mib),
-        )
-        self._policy_reconcile_pending = False
         held_mib = self._allocator.held_mib
+        policy_target_mib = calculate_target_hold_mib(
+            snapshot,
+            current_hold_mib=held_mib,
+            limits=self._limits,
+            preserve_current_hold=not self._policy_reconcile_pending,
+        )
+        if lease_headroom_mib > 0:
+            # Lease activation already released the requested memory through
+            # release_for_lease().  Re-subtracting the lease on every poll used
+            # to shrink the reservation repeatedly as external usage grew.
+            # Keep the post-activation hold fixed until the lease ends, except
+            # that an explicit policy reduction may still lower it.
+            target_mib = (
+                min(held_mib, policy_target_mib)
+                if self._policy_reconcile_pending
+                else held_mib
+            )
+        else:
+            target_mib = policy_target_mib
+        self._policy_reconcile_pending = False
 
         if target_mib < held_mib - self._allocation_tolerance_mib:
             self._growth_candidate = None

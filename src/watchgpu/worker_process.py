@@ -135,6 +135,7 @@ class WorkerProcessProxy:
         self._connection: Connection | None = parent_connection
         self._lock = threading.Lock()
         self._last_status: WorkerStatus | None = None
+        self._pending_command: str | None = None
         self._command_timeout = command_timeout
         self._termination_timeout = termination_timeout
         self._process = context.Process(
@@ -171,6 +172,11 @@ class WorkerProcessProxy:
             if self._last_status is not None:
                 return self._last_status
             raise WorkerProcessError("worker process is not running")
+        # A timed-out RPC may still be executing a CUDA operation.  Returning
+        # the last confirmed status keeps monitoring responsive and, more
+        # importantly, avoids treating a busy worker as if it held 0 MiB.
+        if self._pending_command is not None and self._last_status is not None:
+            return self._last_status
         return self._exchange("status", None)
 
     def is_alive(self) -> bool:
@@ -265,16 +271,34 @@ class WorkerProcessProxy:
         if connection is not None:
             connection.close()
             self._connection = None
+        self._pending_command = None
 
     def _exchange(self, command: str, payload: object) -> WorkerStatus:
         connection = self._connection
         if connection is None or not self._process.is_alive():
-            raise WorkerProcessError(f"worker is unavailable while handling {command}")
+            exitcode = self._process.exitcode
+            detail = "" if exitcode is None else f" (exit code {exitcode})"
+            raise WorkerProcessError(
+                f"worker is unavailable{detail} while handling {command}"
+            )
         with self._lock:
             try:
+                pending_command = self._pending_command
+                if pending_command is not None:
+                    if not connection.poll(self._command_timeout):
+                        raise WorkerProcessTimeoutError(
+                            f"worker is still handling {pending_command} while "
+                            f"handling {command}"
+                        )
+                    self._pending_command = None
+                    self._last_status = self._receive()
                 connection.send((command, payload))
                 if not connection.poll(self._command_timeout):
-                    self.terminate()
+                    # A busy shared GPU can delay this worker's CUDA call.  Do
+                    # not terminate it here: process exit would release the
+                    # entire reservation.  Remember the in-flight request so a
+                    # later call can drain its response before sending another.
+                    self._pending_command = command
                     raise WorkerProcessTimeoutError(
                         f"worker timed out after {self._command_timeout:g}s "
                         f"while handling {command}"

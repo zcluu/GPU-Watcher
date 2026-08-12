@@ -122,7 +122,7 @@ def test_unrelated_policy_update_does_not_unlock_external_pressure_shrink() -> N
     assert status.held_mib == 8000
 
 
-def test_active_lease_can_release_sticky_hold_under_external_pressure() -> None:
+def test_active_lease_freezes_the_hold_released_during_activation() -> None:
     allocator = InMemoryMemoryAllocator(chunk_mib=500)
     allocator.reconcile(8000)
     worker = WorkerController(
@@ -135,9 +135,12 @@ def test_active_lease_can_release_sticky_hold_under_external_pressure() -> None:
         allocation_tolerance_mib=0,
     )
 
+    released = worker.release_for_lease(3000)
     status = worker.tick(_snapshot(free_mib=0), now=0, lease_headroom_mib=3000)
 
-    assert status.action is WorkerAction.SHRINK
+    assert released.action is WorkerAction.RELEASE_FOR_LEASE
+    assert released.held_mib == 5000
+    assert status.action is WorkerAction.NOOP
     assert status.held_mib == 5000
 
 
